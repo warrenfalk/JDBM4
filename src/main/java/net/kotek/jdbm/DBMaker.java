@@ -90,7 +90,7 @@ public class DBMaker {
      * hurts performance with many concurrent-independent updates.
      * <p/>
      * Async Serialization may also produce some unexpected results when your data classes are not
-     * immutable. Consider example bellow. If Async Serialization is disabled, it always prints 'Peter'.
+     * immutable. Consider example below. If Async Serialization is disabled, it always prints 'Peter'.
      * If it is enabled (by default) it creates race condition and randomly prints 'Peter' or 'Jack',
      * <pre>
      *     Person person = new Person();
