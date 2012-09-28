@@ -229,7 +229,7 @@ public class RecordStore implements RecordManager {
                 //nothing was yet allocated at this position, so create new ByteBuffer
                 if(CC.ASSERT && indexSize%BUF_SIZE!=0) throw new InternalError();
                 indexBuf = indexFileChannel.map(FileChannel.MapMode.READ_WRITE, indexSize, BUF_GROWTH);
-                //make sure array is big enought for new item
+                //make sure array is big enough for new item
                 if(indexSlot == indexBufs.length){
                     indexBufs = Arrays.copyOf(indexBufs, indexBufs.length * 2);
                 }
