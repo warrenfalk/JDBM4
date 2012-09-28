@@ -86,7 +86,7 @@ public class DBMaker {
      * node has to be serialized only once. Without Async Serialization node is serialized each time
      * node is updated.
      * <p/>
-     * On other side Async Serialization moves allo serialization into single thread. This
+     * On other side Async Serialization moves allow serialization into single thread. This
      * hurts performance with many concurrent-independent updates.
      * <p/>
      * Async Serialization may also produce some unexpected results when your data classes are not
