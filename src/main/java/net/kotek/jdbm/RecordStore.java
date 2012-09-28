@@ -555,6 +555,7 @@ public class RecordStore implements RecordManager {
             //so just increase file size
             indexValPut(RECID_CURRENT_PHYS_FILE_SIZE, physFileSize + requiredSize);
 
+            //check that current mapped ByteBuffer is large enough, if not we need to grow and remap it
             //check that current mapped ByteBuffer is large enought, if not we need to grow and remap it
             final ByteBuffer dataBuf = dataBufs[((int) (physFileSize / BUF_SIZE))];
             if(physFileSize%BUF_SIZE+requiredSize>dataBuf.capacity()){
