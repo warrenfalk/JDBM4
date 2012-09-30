@@ -5,6 +5,7 @@ import org.junit.After;
 import org.junit.Before;
 
 import java.io.File;
+import java.io.IOError;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -34,7 +35,11 @@ abstract public class JdbmTestCase {
     }
 
     protected RecordStore openRecordManager() {
-        return new RecordStore(fileName);
+        try {
+			return new RecordStore(new FileStorage(new File(fileName + ".d")), new FileStorage(new File(fileName + ".i")));
+		} catch (IOException e) {
+			throw new IOError(e);
+		}
     }
 
     @After
@@ -52,15 +57,15 @@ abstract public class JdbmTestCase {
     }
 
 
-    DataInput2 swap(DataOutput2 d){
+    ByteBufferDataInput swap(DataOutput2 d){
         byte[] b = d.copyBytes();
-        return new DataInput2(ByteBuffer.wrap(b),0);
+        return new ByteBufferDataInput(ByteBuffer.wrap(b),0);
     }
 
 
-    int countIndexRecords(){
+    int countIndexRecords() throws IOException{
         int ret = 0;
-        final long indexFileSize = recman.indexBufs[0].getLong(RecordStore.RECID_CURRENT_INDEX_FILE_SIZE*8);
+        final long indexFileSize = ((SegmentedStorage)recman.indexStorage).segments[0].getLong(RecordStore.RECID_CURRENT_INDEX_FILE_SIZE*8);
         for(int pos = RecordStore.INDEX_OFFSET_START * 8;
             pos<indexFileSize;
             pos+=8){
@@ -71,27 +76,27 @@ abstract public class JdbmTestCase {
         return ret;
     }
 
-    long getIndexRecord(long recid){
+    long getIndexRecord(long recid) throws IOException{
         return recman.indexValGet(recid);
     }
 
-    List<Long> getLongStack(long recid){
+    List<Long> getLongStack(long recid) throws IOException{
         ArrayList<Long> ret =new ArrayList<Long>();
 
         long pagePhysid = recman.indexValGet(recid) & RecordStore.PHYS_OFFSET_MASK;
 
-        ByteBuffer dataBuf = recman.dataBufs[((int) (pagePhysid / RecordStore.BUF_SIZE))];
+        ByteBuffer dataBuf = ((SegmentedStorage)recman.dataStorage).segments[((int) (pagePhysid / SegmentedStorage.SEGMENT_SIZE))];
 
         while(pagePhysid!=0){
-            final byte numberOfRecordsInPage = dataBuf.get((int) (pagePhysid% RecordStore.BUF_SIZE));
+            final byte numberOfRecordsInPage = dataBuf.get((int) (pagePhysid% SegmentedStorage.SEGMENT_SIZE));
 
             for(int rec = numberOfRecordsInPage; rec>0;rec--){
-                final long l = dataBuf.getLong((int) (pagePhysid% RecordStore.BUF_SIZE+ rec*8));
+                final long l = dataBuf.getLong((int) (pagePhysid% SegmentedStorage.SEGMENT_SIZE+ rec*8));
                 ret.add(l);
             }
 
             //read location of previous page
-            pagePhysid = dataBuf.getLong((int)(pagePhysid% RecordStore.BUF_SIZE)) & RecordStore.PHYS_OFFSET_MASK;
+            pagePhysid = dataBuf.getLong((int)(pagePhysid% SegmentedStorage.SEGMENT_SIZE)) & RecordStore.PHYS_OFFSET_MASK;
         }
 
 
@@ -114,7 +119,7 @@ abstract public class JdbmTestCase {
 
     final Map<Long, Integer> getDataContent(){
         Map<Long,Integer> ret = new TreeMap<Long, Integer>();
-        final long indexFileSize = recman.indexBufs[0].getLong(RecordStore.RECID_CURRENT_INDEX_FILE_SIZE*8);
+        final long indexFileSize = ((SegmentedStorage)recman.indexStorage).segments[0].getLong(RecordStore.RECID_CURRENT_INDEX_FILE_SIZE*8);
         for(long recid = RecordStore.INDEX_OFFSET_START ;
             recid*8<indexFileSize;
             recid++){

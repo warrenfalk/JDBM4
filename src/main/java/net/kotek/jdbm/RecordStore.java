@@ -1,31 +1,16 @@
 package net.kotek.jdbm;
 
 
-import java.io.File;
 import java.io.IOError;
 import java.io.IOException;
-import java.io.RandomAccessFile;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class RecordStore implements RecordManager {
 
-    protected final boolean inMemory;
-
-    private FileChannel dataFileChannel;
-    private FileChannel indexFileChannel;
-
-    protected ByteBuffer[] dataBufs = new ByteBuffer[8];
-    protected ByteBuffer[] indexBufs = new ByteBuffer[8];
-
-    static final int  BUF_SIZE = 1<<30;
-    static final int BUF_SIZE_RECID = BUF_SIZE/8;
-
-    static final int BUF_GROWTH = 1<<23;
+    Storage dataStorage;
+    Storage indexStorage;
 
     static final long PHYS_OFFSET_MASK = 0x0000FFFFFFFFFFFFL;
 
@@ -56,11 +41,6 @@ public class RecordStore implements RecordManager {
 
     static final int NUMBER_OF_PHYS_FREE_SLOT =1000 + 1535;
 
-    /** minimal number of longs  to grow index file by, prevents to often buffer remapping*/
-    static final int MINIMAL_INDEX_FILE_GROW = 1024;
-    /** when index file overflows it is grown by NEWSIZE = SIZE + SIZE/N */
-    static final int INDEX_FILE_GROW_FACTOR= 10;
-
     static final int MAX_RECORD_SIZE = 65535;
 
 
@@ -78,76 +58,32 @@ public class RecordStore implements RecordManager {
 
 
 
+    public RecordStore() {
+    	this(new MemoryStorage(), new MemoryStorage());
+    }
 
-    public RecordStore(String fileName) {
+    public RecordStore(Storage indexStorage, Storage dataStorage) {
 
 
-        this.inMemory = fileName ==null;
         try{
             writeLock_lock();
+            
+            this.indexStorage = indexStorage;
+            this.dataStorage = dataStorage;
 
-
-            File dataFile = inMemory? null : new File(fileName+".d");
-            File indexFile = inMemory? null : new File(fileName+".i");
-
-            if(inMemory){
-                dataBufs[0] = ByteBuffer.allocate(1<<16);
-                indexBufs[0] = ByteBuffer.allocate(1<<16);
+            if (dataStorage.size() == 0) {
                 writeInitValues();
-
-            }else if(!dataFile.exists() || dataFile.length()==0){
-                //store does not exist, create files
-                dataFileChannel = new RandomAccessFile(dataFile, "rw").getChannel();
-                indexFileChannel =new RandomAccessFile(indexFile, "rw").getChannel();
-
-                dataBufs[0] =  dataFileChannel.map(FileChannel.MapMode.READ_WRITE, 0, BUF_GROWTH);
-                indexBufs[0] =  indexFileChannel.map(FileChannel.MapMode.READ_WRITE, 0,BUF_GROWTH);
-                writeInitValues();
-            }else{
-                dataFileChannel = new RandomAccessFile(dataFile, "rw").getChannel();
-                indexFileChannel =new RandomAccessFile(indexFile, "rw").getChannel();
-
-                //store exists, open
-                final long dataFileSize = dataFileChannel.size();
-                final long indexFileSize = indexFileChannel.size();
-                //map zero buffers to check header
-                dataBufs[0] =  dataFileChannel.map(FileChannel.MapMode.READ_WRITE, 0, Math.min(BUF_SIZE, dataFileSize));
-                indexBufs[0] =  indexFileChannel.map(FileChannel.MapMode.READ_WRITE, 0,Math.min(BUF_SIZE, indexFileSize));
-
+            }
+            else {
                 //check headers
                 if(CC.ASSERT){
-                    if(dataFileSize<8 || indexFileSize<8 ||
-                            dataBufs[0].getLong(0)!=HEADER ||
-                            indexBufs[0].getLong(0)!=HEADER ){
+                    if(dataStorage.size()<8 || indexStorage.size()<8 ||
+                            dataStorage.getLong(0)!=HEADER ||
+                            indexStorage.getLong(0)!=HEADER ){
                          throw new IOException("Wrong file header, probably not JDBM store.");
                     }
                 }
-
-                //now map remaining buffers
-                long pos = 1;
-                while(pos*BUF_SIZE<dataFileSize){
-                    if(pos == dataBufs.length){
-                        dataBufs = Arrays.copyOf(dataBufs, dataBufs.length*2);
-                    }
-
-                    long remSize = Math.min(dataFileSize-pos*BUF_SIZE, BUF_SIZE) ;
-                    dataBufs[((int) pos)] = dataFileChannel.map(FileChannel.MapMode.READ_WRITE, pos*BUF_SIZE, remSize);
-                    pos++;
-                }
-
-                pos = 1;
-                while(pos*BUF_SIZE<indexFileSize){
-                    if(pos == indexBufs.length){
-                        indexBufs = Arrays.copyOf(indexBufs, indexBufs.length*2);
-                    }
-
-                    long remSize = Math.min(indexFileSize-pos*BUF_SIZE, BUF_SIZE) ;
-                    indexBufs[((int) pos)] = indexFileChannel.map(FileChannel.MapMode.READ_WRITE, pos*BUF_SIZE, remSize);
-                    pos++;
-                }
-
-            }
-
+            }            	
 
         }catch (IOException e){
             throw new IOError(e);
@@ -157,9 +93,9 @@ public class RecordStore implements RecordManager {
 
     }
 
-    private void writeInitValues() {
+    private void writeInitValues() throws IOException {
         //write headers
-        dataBufs[0].putLong(0, HEADER);
+        dataStorage.putLong(0, HEADER);
         indexValPut(0L,HEADER);
 
         //and set current sizes
@@ -192,12 +128,7 @@ public class RecordStore implements RecordManager {
 
                 final long dataPos = indexValue & PHYS_OFFSET_MASK;
 
-                final ByteBuffer dataBuf = dataBufs[((int) (dataPos / BUF_SIZE))];
-
-                //set data cursor to desired position
-                dataBuf.position((int) (dataPos%BUF_SIZE));
-                //write data
-                dataBuf.put(out.buf,0,out.pos);
+                dataStorage.putBytes(dataPos, out.buf, 0, out.pos);
 
                 return recid;
             }finally {
@@ -218,51 +149,12 @@ public class RecordStore implements RecordManager {
             if(CC.ASSERT && indexSize%8!=0) throw new InternalError();
 
             indexValPut(RECID_CURRENT_INDEX_FILE_SIZE, indexSize+8);
-
-            //grow buffer if necessary
-            final int indexSlot = (int) (indexSize/BUF_SIZE);
-            ByteBuffer indexBuf =
-                    indexSlot==indexBufs.length?
-                            null:
-                            indexBufs[indexSlot];
-            if(indexBuf == null){
-                //nothing was yet allocated at this position, so create new ByteBuffer
-                if(CC.ASSERT && indexSize%BUF_SIZE!=0) throw new InternalError();
-                indexBuf = indexFileChannel.map(FileChannel.MapMode.READ_WRITE, indexSize, BUF_GROWTH);
-                //make sure array is big enough for new item
-                if(indexSlot == indexBufs.length){
-                    indexBufs = Arrays.copyOf(indexBufs, indexBufs.length * 2);
-                }
-
-                indexBufs[indexSlot] =  indexBuf;
-            }else if(indexSize%BUF_SIZE>=indexBuf.capacity()){
-                //grow buffer
-                if(inMemory){
-                    int newSize = Math.min(BUF_SIZE, indexBuf.capacity()*2);
-                    ByteBuffer newBuf = ByteBuffer.allocate(newSize);
-                    indexBuf.rewind();
-                    newBuf.put(indexBuf);
-                    indexBuf = newBuf;
-                }else{
-                    indexBuf = indexFileChannel.map(
-                        FileChannel.MapMode.READ_WRITE,
-                        (indexSize/BUF_SIZE)*BUF_SIZE,
-                        indexBuf.capacity() + BUF_GROWTH);
-                }
-                if(CC.ASSERT && indexBuf.capacity()>BUF_SIZE) throw new InternalError();
-//                        //force old buffer to be written
-//                        if(indexBuf instanceof MappedByteBuffer){
-//                            ((MappedByteBuffer)indexBuf).force();
-//                        }
-                indexBufs[indexSlot] =  indexBuf;
-            }
-
         }
         return recid;
     }
 
 
-    protected void freeRecidPut(long recid) {
+    protected void freeRecidPut(long recid) throws IOException {
         longStackPut(RECID_FREE_INDEX_SLOTS, recid);
     }
 
@@ -278,12 +170,10 @@ public class RecordStore implements RecordManager {
                 final int dataSize = (int) (indexValue>>>48);
                 if(dataPos == 0) return null;
 
-                final ByteBuffer dataBuf = dataBufs[((int) (dataPos / BUF_SIZE))];
-
-                DataInput2 in = new DataInput2(dataBuf, (int) (dataPos%BUF_SIZE));
+                StorageDataInput in = new StorageDataInput(dataStorage, dataPos);
                 final A value = serializer.deserialize(in,dataSize);
 
-                if(CC.ASSERT &&  in.pos != dataPos%BUF_SIZE + dataSize)
+                if(CC.ASSERT &&  in.address != dataPos + dataSize)
                         throw new InternalError("Data were not fully read, recid:"+recid+", serializer:"+serializer);
 
                 return value;
@@ -314,16 +204,12 @@ public class RecordStore implements RecordManager {
                if(oldIndexVal >>>48 == out.pos ){
                    //size is the same, so just write new data
                    final long dataPos = oldIndexVal&PHYS_OFFSET_MASK;
-                   final ByteBuffer dataBuf = dataBufs[((int) (dataPos / BUF_SIZE))];
-                   dataBuf.position((int) (dataPos%BUF_SIZE));
-                   dataBuf.put(out.buf,0,out.pos);
+                   dataStorage.putBytes(dataPos, out.buf, 0, out.pos);
                }else{
                    //size has changed, so write into new location
                    final long newIndexValue = freePhysRecTake(out.pos);
                    final long dataPos = newIndexValue&PHYS_OFFSET_MASK;
-                   final ByteBuffer dataBuf = dataBufs[((int) (dataPos / BUF_SIZE))];
-                   dataBuf.position((int) (dataPos%BUF_SIZE));
-                   dataBuf.put(out.buf,0,out.pos);
+                   dataStorage.putBytes(dataPos, out.buf, 0, out.pos);
                    //update index file with new location
                    indexValPut(recid,newIndexValue);
 
@@ -349,7 +235,9 @@ public class RecordStore implements RecordManager {
             freeRecidPut(recid);
             if(oldIndexVal!=0)
                 freePhysRecPut(oldIndexVal);
-        }finally {
+        } catch (IOException e) {
+        	throw new IOError(e);
+		}finally {
             writeLock_unlock();
         }
     }
@@ -383,28 +271,9 @@ public class RecordStore implements RecordManager {
     public void close() {
         try{
             writeLock_lock();
-//            for(ByteBuffer b : dataBufs){
-//                if(b instanceof MappedByteBuffer){
-//                    ((MappedByteBuffer)b).force();
-//                }
-//            }
-//            for(ByteBuffer b : indexBufs){
-//                if(b instanceof MappedByteBuffer){
-//                    ((MappedByteBuffer)b).force();
-//                }
-//            }
 
-            dataBufs = null;
-            indexBufs = null;
-
-//            dataFileChannel.force(true);
-            if(dataFileChannel!=null)
-                dataFileChannel.close();
-            dataFileChannel = null;
-//            indexFileChannel.force(true);
-            if(indexFileChannel!=null)
-                indexFileChannel.close();
-            indexFileChannel = null;
+            dataStorage.close();
+            indexStorage.close();
 
         }catch(IOException e){
             throw new IOError(e);
@@ -414,23 +283,20 @@ public class RecordStore implements RecordManager {
     }
 
 
-    long longStackTake(final long listRecid) {
+    long longStackTake(final long listRecid) throws IOException {
         final long listPhysid = indexValGet(listRecid) &PHYS_OFFSET_MASK;
         if(listPhysid == 0)
             return 0; //there is no such list, so just return 0
 
         writeLock_checkLocked();
 
-        final int bufOffset = (int) (listPhysid%BUF_SIZE);
-       final ByteBuffer dataBuf = dataBufs[((int) (listPhysid / BUF_SIZE))];
-
-        final byte numberOfRecordsInPage = dataBuf.get(bufOffset);
-        final long ret = dataBuf.getLong (bufOffset+numberOfRecordsInPage*8);
+        final byte numberOfRecordsInPage = dataStorage.getByte(listPhysid);
+        final long ret = dataStorage.getLong (listPhysid+numberOfRecordsInPage*8);
 
         //was it only record at that page?
         if(numberOfRecordsInPage == 1){
             //yes, delete this page
-            final long previousListPhysid =dataBuf.getLong(bufOffset) &PHYS_OFFSET_MASK;
+            final long previousListPhysid =dataStorage.getLong(listPhysid) &PHYS_OFFSET_MASK;
             if(previousListPhysid !=0){
                 //update index so it points to previous page
                 indexValPut(listRecid, previousListPhysid | (((long) LONG_STACK_PAGE_SIZE) << 48));
@@ -442,13 +308,13 @@ public class RecordStore implements RecordManager {
             freePhysRecPut(listPhysid | (((long)LONG_STACK_PAGE_SIZE)<<48));
         }else{
             //no, it was not last record at this page, so just decrement the counter
-            dataBuf.put(bufOffset, (byte)(numberOfRecordsInPage-1));
+            dataStorage.putByte(listPhysid, (byte)(numberOfRecordsInPage-1));
         }
         return ret;
 
     }
 
-   void longStackPut(final long listRecid, final long offset) {
+   void longStackPut(final long listRecid, final long offset) throws IOException {
        writeLock_checkLocked();
 
        //index position was cleared, put into free index list
@@ -458,39 +324,35 @@ public class RecordStore implements RecordManager {
             //yes empty, create new page and fill it with values
             final long listPhysid = freePhysRecTake(LONG_STACK_PAGE_SIZE) &PHYS_OFFSET_MASK;
             if(CC.ASSERT && listPhysid == 0) throw new InternalError();
-            ByteBuffer dataBuf = dataBufs[((int) (listPhysid / BUF_SIZE))];
             //set previous Free Index List page to zero as this is first page
-            dataBuf.putLong((int) (listPhysid%BUF_SIZE ), 0L);
+            dataStorage.putLong(listPhysid, 0L);
             //set number of free records in this page to 1
-            dataBuf.put((int)(listPhysid%BUF_SIZE),(byte)1);
+            dataStorage.putByte(listPhysid, (byte)1);
 
             //set  record
-            dataBuf.putLong((int) (listPhysid%BUF_SIZE  + 8), offset);
+            dataStorage.putLong(listPhysid + 8, offset);
             //and update index file with new page location
             indexValPut(listRecid, (((long) LONG_STACK_PAGE_SIZE) << 48) | listPhysid);
         }else{
 
-            final ByteBuffer dataBuf2 = dataBufs[((int) (listPhysid2 / BUF_SIZE))];
-            final byte numberOfRecordsInPage = dataBuf2.get((int) (listPhysid2%BUF_SIZE));
+            final byte numberOfRecordsInPage = dataStorage.getByte(listPhysid2);
             if(numberOfRecordsInPage == LONG_STACK_NUM_OF_RECORDS_PER_PAGE){ //is current page full?
                 //yes it is full, so we need to allocate new page and write our number there
 
                 final long listPhysid = freePhysRecTake(LONG_STACK_PAGE_SIZE) &PHYS_OFFSET_MASK;
                 if(CC.ASSERT && listPhysid == 0) throw new InternalError();
-                final ByteBuffer dataBuf = dataBufs[((int) (listPhysid / BUF_SIZE))];
-                final int buffOffset =(int) (listPhysid%BUF_SIZE);
                 //set location to previous page
-                dataBuf.putLong(buffOffset, listPhysid2);
+                dataStorage.putLong(listPhysid, listPhysid2);
                 //set number of free records in this page to 1
-                dataBuf.put(buffOffset,(byte)1);
+                dataStorage.putByte(listPhysid, (byte)1); // TODO: is this long/byte thing at the same address a packing strategy? if so, let's OR these together instead so we don't have to worry about endianness
                 //set free record
-                dataBuf.putLong(buffOffset +  8, offset);
+                dataStorage.putLong(listPhysid +  8, offset);
                 //and update index file with new page location
                 indexValPut(listRecid, (((long) LONG_STACK_PAGE_SIZE) << 48) | listPhysid);
             }else{
                 //there is space on page, so just write released recid and increase the counter
-                dataBuf2.putLong((int) (listPhysid2%BUF_SIZE +  8 + 8 * numberOfRecordsInPage), offset);
-                dataBuf2.put((int) (listPhysid2%BUF_SIZE), (byte) (numberOfRecordsInPage+1));
+            	dataStorage.putLong(listPhysid2 + 8 + 8 * numberOfRecordsInPage, offset);
+            	dataStorage.putByte(listPhysid2, (byte)(numberOfRecordsInPage + 1));
             }
         }
    }
@@ -509,7 +371,7 @@ public class RecordStore implements RecordManager {
     }
 
 
-    final long freePhysRecTake(final int requiredSize){
+    final long freePhysRecTake(final int requiredSize) throws IOException{
         writeLock_checkLocked();
 
 
@@ -541,102 +403,16 @@ public class RecordStore implements RecordManager {
             }
         }
 
-        try{
-
-        //No free records found, so lets increase the file size.
-        //We need to take case of growing ByteBuffers.
-        // Also max size of ByteBuffer is 2GB, so we need to use multiple ones
-
-        final long physFileSize = indexValGet(RECID_CURRENT_PHYS_FILE_SIZE);
+        //No free records found, so just tack this record on the end
+        long physFileSize = indexValGet(RECID_CURRENT_PHYS_FILE_SIZE);
         if(CC.ASSERT && physFileSize <=0) throw new InternalError();
-
-        if(physFileSize%BUF_SIZE+requiredSize<BUF_SIZE){
-            //there is no need to overflow into new 2GB ByteBuffer.
-            //so just increase file size
-            indexValPut(RECID_CURRENT_PHYS_FILE_SIZE, physFileSize + requiredSize);
-
-            //check that current mapped ByteBuffer is large enough, if not we need to grow and remap it
-            //check that current mapped ByteBuffer is large enought, if not we need to grow and remap it
-            final ByteBuffer dataBuf = dataBufs[((int) (physFileSize / BUF_SIZE))];
-            if(physFileSize%BUF_SIZE+requiredSize>dataBuf.capacity()){
-                //TODO optimize remap to grow slower
-                int newCapacity = dataBuf.capacity();
-                while(physFileSize%BUF_SIZE+requiredSize>newCapacity){
-                    if(inMemory)
-                        newCapacity*=2;
-                    else
-                        newCapacity+=BUF_GROWTH;
-                }
-
-                newCapacity = Math.min(BUF_SIZE, newCapacity);
-
-
-                ByteBuffer dataBuf2;
-                if(inMemory){
-                    dataBuf2 = ByteBuffer.allocate(newCapacity);
-                    dataBuf.rewind();
-                    dataBuf2.put(dataBuf);
-                }else{
-                    dataBuf2 = dataFileChannel.map(FileChannel.MapMode.READ_WRITE,
-                            ((physFileSize/BUF_SIZE)*BUF_SIZE),
-                            newCapacity);
-                }
-                dataBufs[((int) (physFileSize / BUF_SIZE))]  = dataBuf2;
-
-//                //force old buffer to be written
-//                if(dataBuf instanceof MappedByteBuffer){
-//                    ((MappedByteBuffer)dataBuf).force();
-//                }
-
-            }
-
-            //and return this
-            return (((long)requiredSize)<<48) | physFileSize;
-        }else{
-            //new size is overlapping 2GB ByteBuffer, so map second ByteBuffer
-            final ByteBuffer dataBuf1 = dataBufs[((int) (physFileSize / BUF_SIZE))];
-            if(CC.ASSERT && dataBuf1.capacity()!=BUF_SIZE) throw new InternalError();
-
-            //required size does not fit into remaining chunk at dataBuf1, so lets create an free records
-            final long  freeSizeToCreate = BUF_SIZE -  physFileSize%BUF_SIZE;
-            if(CC.ASSERT && freeSizeToCreate == 0) throw new InternalError();
-
-            final long nextBufferStartOffset = physFileSize + freeSizeToCreate;
-            if(CC.ASSERT && nextBufferStartOffset%BUF_SIZE!=0) throw new InternalError();
-            if(CC.ASSERT && dataBufs[((int) (nextBufferStartOffset / BUF_SIZE))]!=null) throw new InternalError();
-
-            //allocate next ByteBuffer in row
-            final ByteBuffer dataBuf2 = dataFileChannel.map(
-                    FileChannel.MapMode.READ_WRITE,
-                    nextBufferStartOffset,
-                    BUF_GROWTH
-            );
-
-            //grow array if necessary
-            final int bufSlot = (int) (nextBufferStartOffset / BUF_SIZE);
-            if(dataBufs.length == bufSlot){
-                dataBufs = Arrays.copyOf(dataBufs,dataBufs.length*2);
-            }
-            dataBufs[bufSlot] =  dataBuf2;
-
-
-            //increase the disk size
-            indexValPut(RECID_CURRENT_PHYS_FILE_SIZE, physFileSize + freeSizeToCreate + requiredSize);
-
-            //previous buffer was not fully filled, so mark it as free record
-            freePhysRecPut(freeSizeToCreate<<48|physFileSize);
-
-            //and finally return position at beginning of new buffer
-            return (((long)requiredSize)<<48) | nextBufferStartOffset;
-        }
-        }catch(IOException e){
-            throw new IOError(e);
-        }
-
+        indexValPut(RECID_CURRENT_PHYS_FILE_SIZE, physFileSize + requiredSize);
+        
+        return ((long)requiredSize << 48) | physFileSize;
     }
 
 
-    final void freePhysRecPut(final long indexValue){
+    final void freePhysRecPut(final long indexValue) throws IOException{
         if(CC.ASSERT && (indexValue &PHYS_OFFSET_MASK)==0) throw new InternalError("zero indexValue: ");
         final int size =  (int) (indexValue>>>48);
 
@@ -644,12 +420,14 @@ public class RecordStore implements RecordManager {
         longStackPut(listRecid, indexValue);
     }
 
-    final long indexValGet(final long recid) {
-        return indexBufs[((int) (recid / BUF_SIZE_RECID))].getLong( (int) (recid%BUF_SIZE_RECID) * 8);
+    final long indexValGet(final long recid) throws IOException {
+    	long address = recid * 8;
+    	return indexStorage.getLong(address);
     }
 
-    final void indexValPut(final long recid, final  long val) {
-        indexBufs[((int) (recid / BUF_SIZE_RECID))].putLong((int) ((recid % BUF_SIZE_RECID) * 8), val);
+    final void indexValPut(final long recid, final  long val) throws IOException {
+    	long address = recid * 8;
+    	indexStorage.putLong(address, val);
     }
 
 
@@ -676,7 +454,7 @@ public class RecordStore implements RecordManager {
     }
 
 
-    protected void forceRecordUpdateOnGivenRecid(final long recid, final byte[] value) {
+    protected void forceRecordUpdateOnGivenRecid(final long recid, final byte[] value) throws IOException {
         try{
             writeLock_lock();
             //check file size
@@ -689,9 +467,7 @@ public class RecordStore implements RecordManager {
             //size has changed, so write into new location
             final long newIndexValue = freePhysRecTake(value.length);
             final long dataPos = newIndexValue&PHYS_OFFSET_MASK;
-            final ByteBuffer dataBuf = dataBufs[((int) (dataPos / BUF_SIZE))];
-            dataBuf.position((int) (dataPos%BUF_SIZE));
-            dataBuf.put(value);
+            dataStorage.putBytes(dataPos, value, 0, value.length);
 
             long oldIndexValue = indexValGet(recid);
             //update index file with new location

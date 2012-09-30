@@ -135,7 +135,7 @@ final public class JdbmUtil {
         try{
             DataOutput2 out = new DataOutput2();
             serializer.serialize(out,value);
-            DataInput2 in = new DataInput2(ByteBuffer.wrap(out.copyBytes()), 0);
+            DataInput in = new ByteBufferDataInput(ByteBuffer.wrap(out.copyBytes()), 0);
 
             return serializer.deserialize(in,-1);
         }catch(IOException ee){

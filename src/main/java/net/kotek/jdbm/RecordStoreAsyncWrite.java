@@ -93,8 +93,8 @@ public class RecordStoreAsyncWrite extends RecordStore{
     private ArrayBlockingQueue<Long> newRecids = new ArrayBlockingQueue<Long>(128);
 
 
-    public RecordStoreAsyncWrite(String fileName, boolean asyncSerialization) {
-        super(fileName);
+    public RecordStoreAsyncWrite(Storage dataStorage, Storage indexStorage, boolean asyncSerialization) {
+        super(dataStorage, indexStorage);
         this.asyncSerialization = asyncSerialization;
         //TODO cache index file size
         //allocatedIndexFileSize = indexValGet(RECID_CURRENT_INDEX_FILE_SIZE);
@@ -166,7 +166,7 @@ public class RecordStoreAsyncWrite extends RecordStore{
                 return (A) ((SerRec)d).value;
             try {
                 byte[] b = (byte[]) d;
-                return serializer.deserialize(new DataInput2(ByteBuffer.wrap(b),0),b.length);
+                return serializer.deserialize(new ByteBufferDataInput(ByteBuffer.wrap(b),0),b.length);
             } catch (IOException e) {
                 throw new IOError(e);
             }
@@ -191,7 +191,9 @@ public class RecordStoreAsyncWrite extends RecordStore{
             for(long recid:newRecids){
                 freeRecidPut(recid);
             }
-        }finally {
+        } catch (IOException e) {
+        	throw new IOError(e);
+		}finally {
             writeLock_unlock();
         }
 

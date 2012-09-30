@@ -14,9 +14,9 @@ public class RecordStoreTest extends JdbmTestCase {
 
     @SuppressWarnings("all")
     @Test public void testSomeAssertions(){
-        if(RecordStore.BUF_SIZE%RecordStore.BUF_GROWTH!=0) throw new InternalError();
-        if(RecordStore.BUF_GROWTH<RecordStore.MAX_RECORD_SIZE) throw new InternalError();
-        if(RecordStore.BUF_GROWTH%8!=0) throw new InternalError();
+        if(SegmentedStorage.SEGMENT_SIZE%FileStorage.GROW_SIZE!=0) throw new InternalError();
+        if(FileStorage.GROW_SIZE<RecordStore.MAX_RECORD_SIZE) throw new InternalError();
+        if(FileStorage.GROW_SIZE%8!=0) throw new InternalError();
 
     }
 
@@ -30,14 +30,14 @@ public class RecordStoreTest extends JdbmTestCase {
     }
 
 
-    @Test public void test_index_record_delete(){
+    @Test public void test_index_record_delete() throws IOException{
         long recid = recman.recordPut(1000L, Serializer.LONG_SERIALIZER);
         assertEquals(1, countIndexRecords());
         recman.recordDelete(recid);
         assertEquals(0, countIndexRecords());
     }
 
-    @Test public void test_index_record_delete_and_reuse(){
+    @Test public void test_index_record_delete_and_reuse() throws IOException{
         long recid = recman.recordPut(1000L, Serializer.LONG_SERIALIZER);
         assertEquals(1, countIndexRecords());
         assertEquals(RecordStore.INDEX_OFFSET_START, recid);
@@ -77,7 +77,7 @@ public class RecordStoreTest extends JdbmTestCase {
 
 
 
-    @Test public void test_phys_record_reused(){
+    @Test public void test_phys_record_reused() throws IOException{
         final long recid = recman.recordPut(1L, Serializer.LONG_SERIALIZER);
         final long physRecid = getIndexRecord(recid);
         recman.recordDelete(recid);
@@ -93,11 +93,11 @@ public class RecordStoreTest extends JdbmTestCase {
     @Test public void test_index_stores_record_size() throws IOException {
 
         final long recid = recman.recordPut(1, Serializer.INTEGER_SERIALIZER);
-        assertEquals(4, readUnsignedShort(recman.indexBufs[0], recid * 8));
+        assertEquals(4, readUnsignedShort(((SegmentedStorage)recman.indexStorage).segments[0], recid * 8));
         assertEquals(Integer.valueOf(1), recman.recordGet(recid, Serializer.INTEGER_SERIALIZER));
 
         recman.recordUpdate(recid, 1L, Serializer.LONG_SERIALIZER);
-        assertEquals(8, readUnsignedShort(recman.indexBufs[0], recid * 8));
+        assertEquals(8, readUnsignedShort(((SegmentedStorage)recman.indexStorage).segments[0], recid * 8));
         assertEquals(Long.valueOf(1), recman.recordGet(recid, Serializer.LONG_SERIALIZER));
 
     }
@@ -106,11 +106,11 @@ public class RecordStoreTest extends JdbmTestCase {
         recman.lock.writeLock().lock();
         recman.longStackPut(RecordStore.RECID_USER_WHOTEVER, 1);
         assertEquals(RecordStore.LONG_STACK_PAGE_SIZE,
-                readUnsignedShort(recman.indexBufs[0], RecordStore.RECID_USER_WHOTEVER * 8));
+                readUnsignedShort(((SegmentedStorage)recman.indexStorage).segments[0], RecordStore.RECID_USER_WHOTEVER * 8));
 
     }
 
-    @Test public void test_long_buffer_put_take(){
+    @Test public void test_long_buffer_put_take() throws IOException{
         recman.lock.writeLock().lock();
 
         final long max = 150;
@@ -126,14 +126,14 @@ public class RecordStoreTest extends JdbmTestCase {
 
         }
 
-    @Test public void test_long_buffer_put_take_simple(){
+    @Test public void test_long_buffer_put_take_simple() throws IOException{
         recman.lock.writeLock().lock();
         recman.longStackPut(RecordStore.RECID_USER_WHOTEVER, 111);
         assertEquals(111L, recman.longStackTake(RecordStore.RECID_USER_WHOTEVER));
     }
 
 
-    @Test public void test_basic_long_buffer(){
+    @Test public void test_basic_long_buffer() throws IOException{
 
         //dirty hack to make sure we have lock
         recman.lock.writeLock().lock();
@@ -185,7 +185,7 @@ public class RecordStoreTest extends JdbmTestCase {
         assertEquals(slotMax, slotMaxMinus1 + 1);
     }
 
-    @Test  public void test_freePhys_PutAndTake(){
+    @Test  public void test_freePhys_PutAndTake() throws IOException{
         recman.lock.writeLock().lock();
 
         final long offset = 1111000;
@@ -198,7 +198,7 @@ public class RecordStoreTest extends JdbmTestCase {
         assertEquals(arrayList(), getLongStack(RecordStore.RECID_FREE_PHYS_RECORDS_START + recman.freePhysRecSize2FreeSlot(size)));
     }
 
-    @Test public void test_freePhys_Put_and_Take_2(){
+    @Test public void test_freePhys_Put_and_Take_2() throws IOException{
 
         byte[] zero = new byte[RecordStore.NUMBER_OF_PHYS_FREE_SLOT*8];
 
@@ -238,9 +238,9 @@ public class RecordStoreTest extends JdbmTestCase {
 
 
                 //zero out all records
-                recman.indexBufs[0].position(RecordStore.RECID_FREE_PHYS_RECORDS_START*8);
-                recman.indexBufs[0].put(zero);
-                recman.indexBufs[0].putLong(RecordStore.RECID_CURRENT_PHYS_FILE_SIZE * 8, 8);
+                ((SegmentedStorage)recman.indexStorage).segments[0].position(RecordStore.RECID_FREE_PHYS_RECORDS_START*8);
+                ((SegmentedStorage)recman.indexStorage).segments[0].put(zero);
+                ((SegmentedStorage)recman.indexStorage).segments[0].putLong(RecordStore.RECID_CURRENT_PHYS_FILE_SIZE * 8, 8);
             }
         }
     }
@@ -287,7 +287,7 @@ public class RecordStoreTest extends JdbmTestCase {
         Assume.assumeTrue(CC.FULL_TEST);
 
         byte[] data = new byte[11111];
-        final long max = RecordStore.BUF_SIZE*2L/data.length;
+        final long max = SegmentedStorage.SEGMENT_SIZE*2L/data.length;
         final Integer hash = Arrays.hashCode(data);
 
         List<Long> recids = new ArrayList<Long>();
@@ -306,7 +306,7 @@ public class RecordStoreTest extends JdbmTestCase {
     }
 
     @Test public void in_memory_test(){
-        RecordStore recman = new RecordStore(null);
+        RecordStore recman = new RecordStore();
         Map<Long, Integer> recids = new HashMap<Long,Integer>();
         for(int i = 0;i<100000;i++){
             long recid = recman.recordPut(i, Serializer.BASIC_SERIALIZER);

@@ -36,7 +36,7 @@ public class SerializerBaseTest extends TestCase {
     }
 
     private Object deserialize(byte[] buf) throws IOException {
-        return ser.deserialize(new DataInput2(ByteBuffer.wrap(buf),0),-1);
+        return ser.deserialize(new ByteBufferDataInput(ByteBuffer.wrap(buf),0),-1);
     }
 
 

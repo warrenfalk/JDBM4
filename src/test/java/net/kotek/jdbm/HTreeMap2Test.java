@@ -2,6 +2,7 @@ package net.kotek.jdbm;
 
 import org.junit.Test;
 
+import java.io.DataInput;
 import java.io.IOException;
 import java.util.*;
 
@@ -81,7 +82,7 @@ public class HTreeMap2Test extends JdbmTestCase {
         DataOutput2 out = new DataOutput2();
         HTreeMap.DIR_SERIALIZER.serialize(out,l);
 
-        DataInput2 in = swap(out);
+        DataInput in = swap(out);
 
         long[][] b = HTreeMap.DIR_SERIALIZER.deserialize(in, -1);
 
@@ -104,7 +105,7 @@ public class HTreeMap2Test extends JdbmTestCase {
         Serializer ln_serializer = new HTreeMap(recman, true).LN_SERIALIZER;
         ln_serializer.serialize(out, n);
 
-        DataInput2 in = swap(out);
+        DataInput in = swap(out);
 
         HTreeMap.LinkedNode n2  = (HTreeMap.LinkedNode) ln_serializer.deserialize(in, -1);
 

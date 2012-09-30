@@ -7,12 +7,12 @@ import java.nio.ByteBuffer;
 /**
  * Wraps ByteBuffer and provides DataInput
  */
-public class DataInput2 implements DataInput {
+public class ByteBufferDataInput implements DataInput {
 
     ByteBuffer buf;
     int pos;
 
-    public DataInput2(final ByteBuffer buf, final int pos) {
+    public ByteBufferDataInput(final ByteBuffer buf, final int pos) {
         this.buf = buf;
         this.pos = pos;
     }
@@ -49,7 +49,7 @@ public class DataInput2 implements DataInput {
 
     @Override
     public int readUnsignedByte() throws IOException {
-        return buf.get(pos++)& 0xff;
+        return readByte() & 0xff;
     }
 
     @Override
@@ -61,12 +61,12 @@ public class DataInput2 implements DataInput {
 
     @Override
     public int readUnsignedShort() throws IOException {
-        return (( (buf.get(pos++) & 0xff) << 8) |
-                ( (buf.get(pos++) & 0xff)));
+        return readShort() & 0xFFFF;
     }
 
     @Override
     public char readChar() throws IOException {
+    	// TODO: read UTF16 here, or even UTF8
         return (char) readInt();
     }
 

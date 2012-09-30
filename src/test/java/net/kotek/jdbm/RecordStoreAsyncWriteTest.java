@@ -3,6 +3,9 @@ package net.kotek.jdbm;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.io.File;
+import java.io.IOError;
+import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -14,7 +17,11 @@ public class RecordStoreAsyncWriteTest extends JdbmTestCase{
 
     @Override
     protected RecordStore openRecordManager() {
-        return new RecordStoreAsyncWrite(fileName,true);
+        try {
+			return new RecordStoreAsyncWrite(new FileStorage(new File(fileName + ".d")),new FileStorage(new File(fileName + ".i")),true);
+		} catch (IOException e) {
+			throw new IOError(e);
+		}
     }
 
 

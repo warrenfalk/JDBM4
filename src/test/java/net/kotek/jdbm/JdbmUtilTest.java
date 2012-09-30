@@ -14,7 +14,7 @@ public class JdbmUtilTest  {
     @Test public void testPackInt() throws Exception {
 
         DataOutput2 out = new DataOutput2();
-        DataInput2 in = new DataInput2(ByteBuffer.wrap(out.buf,0, out.pos),0);
+        ByteBufferDataInput in = new ByteBufferDataInput(ByteBuffer.wrap(out.buf,0, out.pos),0);
         for(int i = 0;i>-1; i = i + 1 + i/1111){  //overflow is expected
             out.pos = 0;
 
@@ -33,7 +33,7 @@ public class JdbmUtilTest  {
     @Test public void testPackLong() throws Exception {
 
         DataOutput2 out = new DataOutput2();
-        DataInput2 in = new DataInput2(ByteBuffer.wrap(out.buf,0, out.pos),0);
+        ByteBufferDataInput in = new ByteBufferDataInput(ByteBuffer.wrap(out.buf,0, out.pos),0);
         for(long i = 0;i>-1L  ; i=i+1 + i/111){  //overflow is expected
             out.pos = 0;
 

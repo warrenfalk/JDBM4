@@ -1,12 +1,17 @@
 package net.kotek.jdbm;
 
+import java.io.File;
+import java.io.IOError;
+import java.io.IOException;
+
 /**
  * A builder class for creating and opening a database.
  */
 public class DBMaker {
 
     /** file to open, if null opens in memory store */
-    protected String file;
+    protected Storage data;
+    protected Storage index;
 
     protected boolean transactionsEnabled = true;
     protected boolean cacheEnabled = true;
@@ -19,16 +24,26 @@ public class DBMaker {
 
     /** Creates new in-memory database. Changes are lost after JVM exits*/
     public static DBMaker newMemoryDB(){
-        DBMaker m = new DBMaker();
-        m.file = null;
-        return  m;
+    	return newDB(new MemoryStorage(), new MemoryStorage());
     }
 
-    /** Creates or open database stored in file. */
+    /** Creates or open database stored in file. 
+     * @throws IOException */
     public static DBMaker newFileDB(String file){
-        DBMaker m = new DBMaker();
-        m.file = file;
-        return  m;
+    	try {
+    		return newDB(new FileStorage(new File(file + ".d")), new FileStorage(new File(file + ".i")));
+        }
+        catch (IOException e) {
+        	throw new IOError(e);
+        }
+    }
+    
+    /** Creates new database with custom storage backend */
+    public static DBMaker newDB(Storage data, Storage index) {
+    	DBMaker m = new DBMaker();
+    	m.data = data;
+    	m.index = index;
+    	return m;
     }
 
 
@@ -117,10 +132,10 @@ public class DBMaker {
         if(transactionsEnabled)
             throw new IllegalAccessError(
                     "Transactions are not implemented yet, please call 'DBMaker.transactionDisable()'");
-
+        
         RecordManager recman = asyncWriteEnabled ?
-                new RecordStoreAsyncWrite(file, asyncSerializationEnabled) :
-                new RecordStore(file);
+                new RecordStoreAsyncWrite(data, index, asyncSerializationEnabled) :
+                new RecordStore(data, index);
 
         if(cacheEnabled)
             recman = new RecordHardCache(recman);

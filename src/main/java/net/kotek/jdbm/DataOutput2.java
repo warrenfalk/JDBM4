@@ -74,6 +74,7 @@ public final class DataOutput2 implements DataOutput {
 
     @Override
     public void writeChar(final int v) throws IOException {
+    	// TODO: write UTF16 here or even UTF8
         writeInt(v);
     }
 
